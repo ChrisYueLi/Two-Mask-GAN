@@ -1,0 +1,53 @@
+# LaTeX build artifacts
+*.aux
+*.bbl
+*.bcf
+*.blg
+*.fdb_latexmk
+*.fls
+*.log
+*.out
+*.run.xml
+*.synctex.gz
+*.toc
+
+# Temporary extraction/check files
+*_text_check.txt
+*.tmp
+
+# Local submission/private review artifacts
+ResponseSummary.pdf
+HRI_2026.pdf
+main.pdf
+HRI_revision_plan_for_agent.md
+revision_comparison_*.txt
+
+# ACM sample/template extras not used by this manuscript package
+README.txt
+sample-*
+sampleteaser.pdf
+acm-jdslogo.png
+acmguide.pdf
+acmauthoryear.bbx
+acmauthoryear.cbx
+acmdatamodel.dbx
+acmnumeric.bbx
+acmnumeric.cbx
+software.bib
+
+# Local/private participant data and large media
+data/
+private/
+raw/
+audio/
+recordings/
+*.wav
+*.flac
+*.mp3
+*.mp4
+
+# OS/editor files
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
