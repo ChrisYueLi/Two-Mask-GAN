@@ -2,7 +2,7 @@
 
 Experiment source code for the Two-Mask-GAN / CMGAN-style speech enhancement and post-filtering experiments used in the HRI technical-venue study.
 
-This release is a CUDA-first, locally testable code package. It is verified against the project development environment:
+This release is a CUDA-first, locally testable code package. The reference development environment is:
 
 - Python: `E:\conda_env\envs\dccrn\python.exe`
 - PyTorch: `2.7.0+cu128`
@@ -23,26 +23,60 @@ Raw participant recordings, full training datasets, generated outputs, logs, che
 
 ## Installation
 
+Clone the repository and enter the project directory:
+
+```bash
+git clone https://github.com/ChrisYueLi/Two-Mask-GAN.git
+cd Two-Mask-GAN
+```
+
+Create and activate a Python environment. For example, with conda:
+
+```bash
+conda create -n two-mask-gan python=3.10
+conda activate two-mask-gan
+```
+
 Install a PyTorch build matching your CUDA setup first, then install the remaining dependencies:
 
 ```bash
-E:\conda_env\envs\dccrn\python.exe -m pip install -r requirements.txt
+pip install torch torchaudio --index-url https://download.pytorch.org/whl/cu128
+pip install -r requirements.txt
 ```
 
-For the local smoke-test environment, the key packages are `pytest`, `pesq`, `pystoi`, and `jiwer` in addition to PyTorch and torchaudio.
+If your machine uses a different CUDA version, replace the PyTorch install command with the appropriate command from the official PyTorch selector. The local smoke tests require `pytest`, `pesq`, `pystoi`, and `jiwer` in addition to PyTorch and torchaudio.
 
 ## Local Verification
 
-Run all local checks from the repository root:
+The repository includes five paired clean/noisy fixture files under `tests/fixtures/audio/`. A downloaded copy of the repository can be tested without downloading the full training dataset or any checkpoint.
+
+Run these checks from the repository root after installation:
 
 ```bash
+python -m compileall src tests
+python -c "import sys; sys.path.insert(0, 'src'); from models.generator import TSCNet; from data.dataloader import DemandDataset; print('ok')"
+python -m pytest -q
+python tests/smoke_test_cuda.py
+```
+
+Expected successful output includes:
+
+```text
+9 passed
+fixture dataset size: 5
+forward shapes: (1, 1, 201, 201), (1, 1, 201, 201)
+checkpoint roundtrip ok
+```
+
+The pytest suite checks fixture audio pairing, CUDA model forward shapes, checkpoint loading, and command-line help for the main entry points. `tests/smoke_test_cuda.py` requires a CUDA-capable GPU. On CPU-only machines, `python -m pytest -q` can still run the non-CUDA checks and will skip CUDA-marked tests.
+
+The commands above were verified in the project environment with:
+
+```powershell
 E:\conda_env\envs\dccrn\python.exe -m compileall src tests
-E:\conda_env\envs\dccrn\python.exe -c "import sys; sys.path.insert(0, 'src'); from models.generator import TSCNet; from data.dataloader import DemandDataset; print('ok')"
 E:\conda_env\envs\dccrn\python.exe -m pytest -q
 E:\conda_env\envs\dccrn\python.exe tests\smoke_test_cuda.py
 ```
-
-The pytest suite checks fixture audio pairing, CUDA model forward shapes, checkpoint loading, and command-line help for the main entry points.
 
 ## Data Layout
 
