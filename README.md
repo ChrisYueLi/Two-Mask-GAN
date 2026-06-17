@@ -1,27 +1,85 @@
-# HRI Technical Venue
+# Two-Mask-GAN
 
-This repository contains shareable manuscript materials for:
+Experiment source code for the Two-Mask-GAN / CMGAN-style speech enhancement and post-filtering experiments used in the HRI technical-venue study.
 
-**Improving Recognition of Overlapping Human Speech on Single-Microphone Social Robots with Streaming Two-Mask CMGAN Post-Filtering**
+## Repository Contents
 
-The manuscript is prepared for submission to *ACM Transactions on Human-Robot Interaction (THRI)*.
+This repository contains the shareable experiment code only:
 
-## Contents
+- `src/train.py`: distributed training entry point.
+- `src/evaluation.py`, `src/evaluate_folder.py`, `src/evaluate_file.py`, `src/single_file_evaluation.py`, `src/streaming_input_evaluation.py`: enhancement and evaluation scripts.
+- `src/models/`: generator, discriminator, Conformer, and local Mamba-style modules.
+- `src/data/dataloader.py`: paired clean/noisy audio dataloader.
+- `src/tools/`: metric and TensorBoard helper utilities.
 
-- `main.tex`: manuscript source
-- `mybib.bib`: bibliography source
-- `figs/`: manuscript figures
-- `title_page.tex`: non-anonymous title page source
-- `title_page.pdf`: compiled title page
+Raw participant recordings, generated audio outputs, logs, checkpoints, and local analysis tables are intentionally excluded from version control because they are large and may contain identifiable or non-shareable data.
 
-## Data and Code Availability
+## Data Layout
 
-Code, scripts, and anonymized derived materials supporting this study are intended to be made available through this public repository. Raw participant audio recordings are not publicly released because they may contain identifiable voice data; access may be considered upon reasonable request subject to consent, ethics, and privacy constraints.
+Training expects paired clean and noisy `.wav` files. Use one of these layouts:
 
-## Ethics
+```text
+dataset/
+  train/
+    clean/
+    noisy/
+  valid/
+    clean/
+    noisy/
+```
 
-The research ethics self-check of the Ethics Review Committee of the Faculty of Science (BETHCIE), Vrije Universiteit Amsterdam, completed on 01/02/2025, indicated that this project does not require further evaluation by the Research Ethics Review Committee. All participants provided informed consent prior to recording.
+or a single folder with `clean/` and `noisy/`; the dataloader can create an internal split.
 
-## Funding
+File names in `clean/` and `noisy/` should match so that each noisy utterance has the corresponding clean reference.
 
-This work was supported by the Chinese Scholarship Council.
+## Installation
+
+Create an environment with a PyTorch build matching your CUDA or CPU setup, then install the remaining dependencies:
+
+```bash
+pip install -r requirements.txt
+```
+
+The exact PyTorch install command depends on the target platform and CUDA version. See the official PyTorch installation instructions for the appropriate wheel.
+
+## Training
+
+From the repository root:
+
+```bash
+cd src
+python train.py --data_dir /path/to/dataset --save_model_dir ../checkpoints --log_dir ../logs
+```
+
+The training script uses PyTorch distributed training. On a multi-GPU machine, set the CUDA environment as needed before launching.
+
+## Enhancement
+
+Enhance a folder of noisy waveforms with a trained checkpoint:
+
+```bash
+cd src
+python evaluate_folder.py --model_path /path/to/checkpoint --test_dir /path/to/noisy_wavs --save_dir ../results/enhanced --streaming 1
+```
+
+`--streaming 1` uses chunked streaming-style inference; set `--streaming 0` for full-utterance inference.
+
+## Metrics
+
+Feature-level PESQ/STOI/SNR evaluation:
+
+```bash
+cd src
+python Feature_evaluation.py --enhanced_dir ../results/enhanced --clean_dir /path/to/clean_refs --output_csv ../results/evaluation_results.csv
+```
+
+ASR WER evaluation:
+
+```bash
+cd src
+python ASR_eval.py --asr_model /path/or/hf-model-name --data_dir /path/to/data --folder test --subfolder result --output_csv ../results/cmgan_result.csv
+```
+
+## Availability Notes
+
+The public release includes code and lightweight documentation. Checkpoints, raw audio, and generated experimental results should be distributed separately only when licensing, consent, ethics, and privacy constraints allow it.
