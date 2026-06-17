@@ -86,7 +86,7 @@ def _pair_collate(batch):
     return clean, noisy, lengths
 
 
-def load_data(ds_dir, batch_size, n_cpu, cut_len, val_split=0.1, seed=42):
+def load_data(ds_dir, batch_size, n_cpu, cut_len, val_split=0.1, seed=42, distributed=False):
     train_dir = os.path.join(ds_dir, "train")
     test_dir = os.path.join(ds_dir, "valid")
 
@@ -114,8 +114,8 @@ def load_data(ds_dir, batch_size, n_cpu, cut_len, val_split=0.1, seed=42):
         batch_size=batch_size,
         collate_fn=_pair_collate,
         pin_memory=True,
-        shuffle=False,
-        sampler=DistributedSampler(train_ds),
+        shuffle=not distributed,
+        sampler=DistributedSampler(train_ds) if distributed else None,
         drop_last=True,
         num_workers=n_cpu,
     )
@@ -125,7 +125,7 @@ def load_data(ds_dir, batch_size, n_cpu, cut_len, val_split=0.1, seed=42):
         collate_fn=_pair_collate,
         pin_memory=True,
         shuffle=False,
-        sampler=DistributedSampler(test_ds),
+        sampler=DistributedSampler(test_ds) if distributed else None,
         drop_last=False,
         num_workers=n_cpu,
     )

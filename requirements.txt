@@ -18,3 +18,4 @@ torchinfo
 torchsummary
 transformers
 jiwer
+pytest

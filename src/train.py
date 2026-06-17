@@ -1,4 +1,3 @@
-from models.generator import TSCNet
 from models import discriminator
 import os
 from data import dataloader
@@ -7,10 +6,16 @@ import torch
 import torchaudio
 from utils import power_compress, power_uncompress
 import logging
-from torchinfo import summary
 import argparse
 from pathlib import Path
 from torch.utils.tensorboard import SummaryWriter
+from runtime import build_generator, get_model_state_dict, resolve_device
+
+try:
+    from torchinfo import summary
+except ImportError:
+    def summary(*args, **kwargs):
+        return None
 
 import torch.multiprocessing as mp
 from torch.nn.parallel import DistributedDataParallel as DDP
@@ -28,6 +33,13 @@ parser.add_argument("--batch_size", type=int, default=4)
 parser.add_argument("--log_interval", type=int, default=500)
 parser.add_argument("--decay_epoch", type=int, default=30, help="epoch from which to start lr decay")
 parser.add_argument("--init_lr", type=float, default=5e-4, help="initial learning rate")
+parser.add_argument("--device", type=str, default="cuda", help="device for single-GPU training")
+parser.add_argument("--distributed", action="store_true", help="enable multi-GPU distributed training")
+parser.add_argument("--ddp_backend", type=str, default="nccl", help="distributed backend")
+parser.add_argument("--num_workers", type=int, default=2, help="DataLoader worker count")
+parser.add_argument("--num_channel", type=int, default=128, help="TSCNet channel width")
+parser.add_argument("--mask_mode", type=str, default="add", choices=["add", "mul"], help="masking mode")
+parser.add_argument("--module", type=str, default="conformer", choices=["conformer", "mamba"], help="sequence module")
 parser.add_argument("--cut_len", type=int, default=16000*2, help="cut length, default is 2 seconds in denoise "
                                                                  "and dereverberation")
 parser.add_argument("--data_dir", type=str, default='dir to VCTK-DEMAND dataset',
@@ -41,7 +53,7 @@ args = parser.parse_args()
 logging.basicConfig(level=logging.INFO)
 
 
-def ddp_setup(rank, world_size):
+def ddp_setup(rank, world_size, backend):
     """
     Args:
         rank: Unique identifier of each process
@@ -49,7 +61,7 @@ def ddp_setup(rank, world_size):
     """
     os.environ["MASTER_ADDR"] = "localhost"
     os.environ["MASTER_PORT"] = "12355"
-    init_process_group(backend="nccl", rank=rank, world_size=world_size)
+    init_process_group(backend=backend, rank=rank, world_size=world_size)
 
 
 class Trainer:
@@ -93,9 +105,9 @@ class Trainer:
         if not self.is_main:
             return
         batch = self._next_test_batch()
-        clean = batch[0].to(self.gpu_id)
-        noisy = batch[1].to(self.gpu_id)
-        one_labels = torch.ones(clean.size(0)).to(self.gpu_id)
+        clean = batch[0].to(self.device)
+        noisy = batch[1].to(self.device)
+        one_labels = torch.ones(clean.size(0), device=self.device)
 
         generator_outputs = self.forward_generator_step(clean, noisy)
         generator_outputs["one_labels"] = one_labels
@@ -120,26 +132,33 @@ class Trainer:
         # Audio logging disabled.
 
 
-    def __init__(self, train_ds, test_ds, gpu_id: int):
+    def __init__(self, train_ds, test_ds, device, gpu_id=0, distributed=False):
         self.n_fft = 400
         self.hop = 100
         self.n_mels = 80
         self.train_ds = train_ds
         self.test_ds = test_ds
+        self.device = torch.device(device)
+        self.gpu_id = gpu_id
+        self.distributed = distributed
         self.mel = torchaudio.transforms.MelSpectrogram(
             sample_rate=args.sample_rate,
             n_fft=self.n_fft,
             hop_length=self.hop,
             n_mels=self.n_mels,
             power=2.0,
-        ).to(gpu_id)
-        self.model = TSCNet(
-            num_channel=128, num_features=self.n_fft // 2 + 1, mask_mode="add", module='conformer'
-        ).cuda()
+        ).to(self.device)
+        self.model = build_generator(
+            self.device,
+            n_fft=self.n_fft,
+            num_channel=args.num_channel,
+            mask_mode=args.mask_mode,
+            module=args.module,
+        )
         summary(
             self.model, [(1, 2, args.cut_len // self.hop + 1, int(self.n_fft / 2) + 1)]
         )
-        self.discriminator = discriminator.Discriminator(ndf=16).cuda()
+        self.discriminator = discriminator.Discriminator(ndf=16).to(self.device)
         summary(
             self.discriminator,
             [
@@ -152,9 +171,9 @@ class Trainer:
             self.discriminator.parameters(), lr=2 * args.init_lr
         )
 
-        self.model = DDP(self.model, device_ids=[gpu_id])
-        self.discriminator = DDP(self.discriminator, device_ids=[gpu_id])
-        self.gpu_id = gpu_id
+        if self.distributed:
+            self.model = DDP(self.model, device_ids=[gpu_id])
+            self.discriminator = DDP(self.discriminator, device_ids=[gpu_id])
         self.global_step = 0
         self._init_logging()
 
@@ -171,7 +190,7 @@ class Trainer:
             noisy,
             self.n_fft,
             self.hop,
-            window=torch.hamming_window(self.n_fft).to(self.gpu_id),
+            window=torch.hamming_window(self.n_fft).to(self.device),
             onesided=True,
             return_complex=False,
         )
@@ -179,7 +198,7 @@ class Trainer:
             clean,
             self.n_fft,
             self.hop,
-            window=torch.hamming_window(self.n_fft).to(self.gpu_id),
+            window=torch.hamming_window(self.n_fft).to(self.device),
             onesided=True,
             return_complex=False,
         )
@@ -201,7 +220,7 @@ class Trainer:
             est_spec_complex,
             self.n_fft,
             self.hop,
-            window=torch.hamming_window(self.n_fft).to(self.gpu_id),
+            window=torch.hamming_window(self.n_fft).to(self.device),
             onesided=True,
         )
         clean_mel = self._to_mel(clean)
@@ -281,9 +300,9 @@ class Trainer:
     def train_step(self, batch):
 
         # Trainer generator
-        clean = batch[0].to(self.gpu_id)
-        noisy = batch[1].to(self.gpu_id)
-        one_labels = torch.ones(clean.size(0)).to(self.gpu_id)
+        clean = batch[0].to(self.device)
+        noisy = batch[1].to(self.device)
+        one_labels = torch.ones(clean.size(0), device=self.device)
 
         generator_outputs = self.forward_generator_step(
             clean,
@@ -323,9 +342,9 @@ class Trainer:
     @torch.no_grad()
     def test_step(self, batch):
 
-        clean = batch[0].to(self.gpu_id)
-        noisy = batch[1].to(self.gpu_id)
-        one_labels = torch.ones(clean.size(0)).to(self.gpu_id)
+        clean = batch[0].to(self.device)
+        noisy = batch[1].to(self.device)
+        one_labels = torch.ones(clean.size(0), device=self.device)
 
         generator_outputs = self.forward_generator_step(
             clean,
@@ -351,8 +370,8 @@ class Trainer:
         for b_idx, batch in enumerate(self.test_ds):
             if b_idx >= num_batches:
                 break
-            clean = batch[0].to(self.gpu_id)
-            noisy = batch[1].to(self.gpu_id)
+            clean = batch[0].to(self.device)
+            noisy = batch[1].to(self.device)
             generator_outputs = self.forward_generator_step(clean, noisy)
             est_audio = self.peak_normalize(generator_outputs["est_audio"].detach().cpu())
             batch_size = min(num_samples, est_audio.size(0))
@@ -396,9 +415,11 @@ class Trainer:
         patience = 5
         start_epoch = 0
         if args.resume:
-            ckpt = torch.load(args.resume, map_location=self.gpu_id)
-            self.model.module.load_state_dict(ckpt["model"])
-            self.discriminator.module.load_state_dict(ckpt["discriminator"])
+            ckpt = torch.load(args.resume, map_location=self.device)
+            model_target = self.model.module if self.distributed else self.model
+            discriminator_target = self.discriminator.module if self.distributed else self.discriminator
+            model_target.load_state_dict(ckpt["model"])
+            discriminator_target.load_state_dict(ckpt["discriminator"])
             self.optimizer.load_state_dict(ckpt["optimizer"])
             self.optimizer_disc.load_state_dict(ckpt["optimizer_disc"])
             scheduler_G.load_state_dict(ckpt["scheduler_G"])
@@ -470,13 +491,13 @@ class Trainer:
             if not os.path.exists(args.save_model_dir):
                 os.makedirs(args.save_model_dir)
             if self.gpu_id == 0:
-                torch.save(self.model.module.state_dict(), path)
+                torch.save(get_model_state_dict(self.model), path)
                 ckpt_path = os.path.join(args.save_model_dir, "ckpt_latest.pt")
                 torch.save(
                     {
                         "epoch": epoch,
-                        "model": self.model.module.state_dict(),
-                        "discriminator": self.discriminator.module.state_dict(),
+                        "model": get_model_state_dict(self.model),
+                        "discriminator": get_model_state_dict(self.discriminator),
                         "optimizer": self.optimizer.state_dict(),
                         "optimizer_disc": self.optimizer_disc.state_dict(),
                         "scheduler_G": scheduler_G.state_dict(),
@@ -496,13 +517,13 @@ class Trainer:
                     epoch + 1, num_batches=1, num_samples=args.log_audio_samples
                 )
             if dist.is_available() and dist.is_initialized() and self.gpu_id != 0:
-                stop_flag = torch.tensor(0, device=self.gpu_id)
+                stop_flag = torch.tensor(0, device=self.device)
             else:
                 stop_flag = torch.tensor(
                     1
                     if (no_improve_train >= patience or no_improve_val >= patience)
                     else 0,
-                    device=self.gpu_id,
+                    device=self.device,
                 )
             if dist.is_available() and dist.is_initialized():
                 dist.broadcast(stop_flag, src=0)
@@ -518,7 +539,7 @@ class Trainer:
 
 def main(rank: int, world_size: int, args):
     torch.cuda.set_device(rank)
-    ddp_setup(rank, world_size)
+    ddp_setup(rank, world_size, args.ddp_backend)
     if rank == 0:
         print(args)
         available_gpus = [
@@ -526,14 +547,30 @@ def main(rank: int, world_size: int, args):
         ]
         print(available_gpus)
     train_ds, test_ds = dataloader.load_data(
-        args.data_dir, args.batch_size, 2, args.cut_len
+        args.data_dir, args.batch_size, args.num_workers, args.cut_len, distributed=True
     )
-    trainer = Trainer(train_ds, test_ds, rank)
+    trainer = Trainer(train_ds, test_ds, torch.device("cuda", rank), rank, distributed=True)
     trainer.train()
     destroy_process_group()
 
 
 if __name__ == "__main__":
-
-    world_size = torch.cuda.device_count()
-    mp.spawn(main, args=(world_size, args), nprocs=world_size)
+    if args.distributed:
+        world_size = torch.cuda.device_count()
+        if world_size < 1:
+            raise RuntimeError("Distributed training requires at least one CUDA device")
+        mp.spawn(main, args=(world_size, args), nprocs=world_size)
+    else:
+        device = resolve_device(args.device)
+        if device.type == "cuda":
+            torch.cuda.set_device(device)
+        print(args)
+        train_ds, test_ds = dataloader.load_data(
+            args.data_dir,
+            args.batch_size,
+            args.num_workers,
+            args.cut_len,
+            distributed=False,
+        )
+        trainer = Trainer(train_ds, test_ds, device, 0, distributed=False)
+        trainer.train()

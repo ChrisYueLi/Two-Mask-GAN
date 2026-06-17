@@ -1,5 +1,4 @@
 import numpy as np
-from models import generator
 from natsort import natsorted
 import os
 from tools.compute_metrics import compute_metrics
@@ -8,11 +7,13 @@ import librosa
 import soundfile as sf
 import argparse
 import shutil
+import torch
+from runtime import build_generator, load_generator_checkpoint, resolve_device, str2bool
 
 
 @torch.no_grad()
 def enhance_one_track(
-    model, audio_path, saved_dir, n_fft=400, hop=100, save_tracks=False
+    model, audio_path, saved_dir, device, n_fft=400, hop=100, save_tracks=False
 ):
     name = os.path.split(audio_path)[-1]
     noisy, sr = librosa.load(audio_path,sr=16000)
@@ -25,10 +26,10 @@ def enhance_one_track(
     seg_noise = librosa.util.frame(noisy,frame_length=2*sr,hop_length=2*sr)
     for cnt in range(seg_noise.shape[1]):
 
-        input_wave = torch.from_numpy(seg_noise[:,cnt]).cuda().unsqueeze(0)        
+        input_wave = torch.from_numpy(seg_noise[:,cnt]).to(device).unsqueeze(0)
 
         noisy_spec = torch.view_as_real(torch.stft(
-            input_wave, n_fft, hop, window=torch.hamming_window(n_fft).cuda(), onesided=True,return_complex=True
+            input_wave, n_fft, hop, window=torch.hamming_window(n_fft).to(device), onesided=True,return_complex=True
         ))
         noisy_spec = power_compress(noisy_spec).permute(0, 1, 3, 2)
         est_real, est_imag = model(noisy_spec)
@@ -40,7 +41,7 @@ def enhance_one_track(
             est_spec_uncompress,
             n_fft,
             hop,
-            window=torch.hamming_window(n_fft).cuda(),
+            window=torch.hamming_window(n_fft).to(device),
             onesided=True,
         )
         output[cnt*2*sr:(cnt+1)*2*sr] = torch.flatten(est_audio).detach().cpu().numpy()
@@ -52,12 +53,14 @@ def enhance_one_track(
     return est_audio
 
 
-def evaluation(model_path, noisy_dir, clean_dir, save_tracks, saved_dir):
-    torch.cuda.empty_cache()
+def evaluation(model_path, noisy_dir, clean_dir, save_tracks, saved_dir, device, num_channel, mask_mode, module):
+    if device.type == "cuda":
+        torch.cuda.empty_cache()
     n_fft = 400
-    model = generator.TSCNet(num_channel=64, num_features=n_fft // 2 + 1).cuda()
-    model.load_state_dict((torch.load(model_path)))
+    model = build_generator(device, n_fft=n_fft, num_channel=num_channel, mask_mode=mask_mode, module=module)
+    load_generator_checkpoint(model, model_path, device)
     model.eval()
+    os.makedirs(saved_dir, exist_ok=True)
 
     # if os.path.exists(saved_dir):
     #     shutil.rmtree(saved_dir)
@@ -76,7 +79,7 @@ def evaluation(model_path, noisy_dir, clean_dir, save_tracks, saved_dir):
             noisy_path = os.path.join(noisy_dir, audio)
             # clean_path = os.path.join(clean_dir, audio.split('_')[-1])
             est_audio = enhance_one_track(
-                model, noisy_path, saved_dir, n_fft, n_fft // 4, save_tracks
+                model, noisy_path, saved_dir, device, n_fft, n_fft // 4, save_tracks
             )
             print('{:.2f}%'.format(count_num/num*100))
     #         clean_audio, sr = sf.read(clean_path)
@@ -103,19 +106,34 @@ def evaluation(model_path, noisy_dir, clean_dir, save_tracks, saved_dir):
 
 
 parser = argparse.ArgumentParser()
-parser.add_argument("--model_path", type=str, default='./best_ckpt/ckpt_80',
+parser.add_argument("--model_path", type=str, required=True,
                     help="the path where the model is saved")
-parser.add_argument("--noisy_dir", type=str, default='dir to your VCTK-DEMAND test dataset',
+parser.add_argument("--noisy_dir", type=str, required=True,
                     help="noisy tracks dir to be enhanced")
-parser.add_argument("--clean_dir", type=str, default='dir to your VCTK-DEMAND test dataset',
+parser.add_argument("--clean_dir", type=str, default="",
                     help="clean tracks dir to be enhanced")
-parser.add_argument("--save_tracks", type=str, default=True, help="save predicted tracks or not")
+parser.add_argument("--save_tracks", type=str2bool, default=True, help="save predicted tracks or not")
 parser.add_argument("--save_dir", type=str, default='./saved_tracks_best', help="where enhanced tracks to be saved")
+parser.add_argument("--device", type=str, default="cuda", help="torch device")
+parser.add_argument("--num_channel", type=int, default=128, help="TSCNet channel width")
+parser.add_argument("--mask_mode", type=str, default="add", choices=["add", "mul"], help="masking mode")
+parser.add_argument("--module", type=str, default="conformer", choices=["conformer", "mamba"], help="sequence module")
 
 args = parser.parse_args()
 
 
 if __name__ == "__main__":
+    device = resolve_device(args.device)
     noisy_dir = args.noisy_dir
     clean_dir = args.clean_dir
-    evaluation(args.model_path, noisy_dir, clean_dir, args.save_tracks, args.save_dir)
+    evaluation(
+        args.model_path,
+        noisy_dir,
+        clean_dir,
+        args.save_tracks,
+        args.save_dir,
+        device,
+        args.num_channel,
+        args.mask_mode,
+        args.module,
+    )

@@ -26,6 +26,21 @@ train_test_dir/
 
 # Audio, model weights, and generated datasets
 *.wav
+!tests/
+!tests/fixtures/
+!tests/fixtures/audio/
+!tests/fixtures/audio/clean/
+!tests/fixtures/audio/noisy/
+!tests/fixtures/audio/clean/00000.wav
+!tests/fixtures/audio/clean/00001.wav
+!tests/fixtures/audio/clean/00002.wav
+!tests/fixtures/audio/clean/00003.wav
+!tests/fixtures/audio/clean/00004.wav
+!tests/fixtures/audio/noisy/00000.wav
+!tests/fixtures/audio/noisy/00001.wav
+!tests/fixtures/audio/noisy/00002.wav
+!tests/fixtures/audio/noisy/00003.wav
+!tests/fixtures/audio/noisy/00004.wav
 *.flac
 *.mp3
 *.pt

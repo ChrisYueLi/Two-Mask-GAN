@@ -5,10 +5,11 @@ import jiwer
 import pandas as pd
 import torch
 from tqdm import tqdm
-from transformers import AutoModelForSpeechSeq2Seq, AutoProcessor, pipeline
 
 
 def evaluate(args):
+    from transformers import AutoModelForSpeechSeq2Seq, AutoProcessor, pipeline
+
     device = "cuda:0" if torch.cuda.is_available() else "cpu"
     torch_dtype = torch.float16 if torch.cuda.is_available() else torch.float32
 

@@ -2,17 +2,47 @@
 
 Experiment source code for the Two-Mask-GAN / CMGAN-style speech enhancement and post-filtering experiments used in the HRI technical-venue study.
 
+This release is a CUDA-first, locally testable code package. It is verified against the project development environment:
+
+- Python: `E:\conda_env\envs\dccrn\python.exe`
+- PyTorch: `2.7.0+cu128`
+- GPU: NVIDIA GeForce RTX 5070 Ti
+
+CPU-only machines can still inspect the code and run some import/help checks, but full training and model smoke tests target CUDA.
+
 ## Repository Contents
 
-This repository contains the shareable experiment code only:
-
-- `src/train.py`: distributed training entry point.
-- `src/evaluation.py`, `src/evaluate_folder.py`, `src/evaluate_file.py`, `src/single_file_evaluation.py`, `src/streaming_input_evaluation.py`: enhancement and evaluation scripts.
+- `src/train.py`: single-GPU CUDA training by default, with optional DDP via `--distributed`.
+- `src/evaluate_folder.py`, `src/evaluate_file.py`, `src/evaluation.py`, `src/single_file_evaluation.py`, `src/streaming_input_evaluation.py`: enhancement and evaluation scripts.
 - `src/models/`: generator, discriminator, Conformer, and local Mamba-style modules.
 - `src/data/dataloader.py`: paired clean/noisy audio dataloader.
-- `src/tools/`: metric and TensorBoard helper utilities.
+- `tests/`: local pytest checks and a CUDA smoke script.
+- `tests/fixtures/audio/`: five paired clean/noisy `.wav` files used only for smoke tests.
 
-Raw participant recordings, generated audio outputs, logs, checkpoints, and local analysis tables are intentionally excluded from version control because they are large and may contain identifiable or non-shareable data.
+Raw participant recordings, full training datasets, generated outputs, logs, checkpoints, and local analysis tables are intentionally excluded from version control.
+
+## Installation
+
+Install a PyTorch build matching your CUDA setup first, then install the remaining dependencies:
+
+```bash
+E:\conda_env\envs\dccrn\python.exe -m pip install -r requirements.txt
+```
+
+For the local smoke-test environment, the key packages are `pytest`, `pesq`, `pystoi`, and `jiwer` in addition to PyTorch and torchaudio.
+
+## Local Verification
+
+Run all local checks from the repository root:
+
+```bash
+E:\conda_env\envs\dccrn\python.exe -m compileall src tests
+E:\conda_env\envs\dccrn\python.exe -c "import sys; sys.path.insert(0, 'src'); from models.generator import TSCNet; from data.dataloader import DemandDataset; print('ok')"
+E:\conda_env\envs\dccrn\python.exe -m pytest -q
+E:\conda_env\envs\dccrn\python.exe tests\smoke_test_cuda.py
+```
+
+The pytest suite checks fixture audio pairing, CUDA model forward shapes, checkpoint loading, and command-line help for the main entry points.
 
 ## Data Layout
 
@@ -28,30 +58,23 @@ dataset/
     noisy/
 ```
 
-or a single folder with `clean/` and `noisy/`; the dataloader can create an internal split.
-
-File names in `clean/` and `noisy/` should match so that each noisy utterance has the corresponding clean reference.
-
-## Installation
-
-Create an environment with a PyTorch build matching your CUDA or CPU setup, then install the remaining dependencies:
-
-```bash
-pip install -r requirements.txt
-```
-
-The exact PyTorch install command depends on the target platform and CUDA version. See the official PyTorch installation instructions for the appropriate wheel.
+or a single folder with `clean/` and `noisy/`; the dataloader can create an internal validation split. File names in `clean/` and `noisy/` must match.
 
 ## Training
 
-From the repository root:
+Single-GPU CUDA training:
 
 ```bash
 cd src
-python train.py --data_dir /path/to/dataset --save_model_dir ../checkpoints --log_dir ../logs
+E:\conda_env\envs\dccrn\python.exe train.py --data_dir /path/to/dataset --save_model_dir ../checkpoints --log_dir ../logs --device cuda --num_channel 128 --mask_mode add --module conformer
 ```
 
-The training script uses PyTorch distributed training. On a multi-GPU machine, set the CUDA environment as needed before launching.
+Multi-GPU DDP is still available when the platform supports it:
+
+```bash
+cd src
+E:\conda_env\envs\dccrn\python.exe train.py --data_dir /path/to/dataset --distributed --ddp_backend nccl
+```
 
 ## Enhancement
 
@@ -59,7 +82,7 @@ Enhance a folder of noisy waveforms with a trained checkpoint:
 
 ```bash
 cd src
-python evaluate_folder.py --model_path /path/to/checkpoint --test_dir /path/to/noisy_wavs --save_dir ../results/enhanced --streaming 1
+E:\conda_env\envs\dccrn\python.exe evaluate_folder.py --model_path /path/to/checkpoint --test_dir /path/to/noisy_wavs --save_dir ../results/enhanced --streaming 1 --device cuda --num_channel 128 --mask_mode add --module conformer
 ```
 
 `--streaming 1` uses chunked streaming-style inference; set `--streaming 0` for full-utterance inference.
@@ -70,16 +93,16 @@ Feature-level PESQ/STOI/SNR evaluation:
 
 ```bash
 cd src
-python Feature_evaluation.py --enhanced_dir ../results/enhanced --clean_dir /path/to/clean_refs --output_csv ../results/evaluation_results.csv
+E:\conda_env\envs\dccrn\python.exe Feature_evaluation.py --enhanced_dir ../results/enhanced --clean_dir /path/to/clean_refs --output_csv ../results/evaluation_results.csv
 ```
 
 ASR WER evaluation:
 
 ```bash
 cd src
-python ASR_eval.py --asr_model /path/or/hf-model-name --data_dir /path/to/data --folder test --subfolder result --output_csv ../results/cmgan_result.csv
+E:\conda_env\envs\dccrn\python.exe ASR_eval.py --asr_model /path/or/hf-model-name --data_dir /path/to/data --folder test --subfolder result --output_csv ../results/cmgan_result.csv
 ```
 
 ## Availability Notes
 
-The public release includes code and lightweight documentation. Checkpoints, raw audio, and generated experimental results should be distributed separately only when licensing, consent, ethics, and privacy constraints allow it.
+This public release includes code, lightweight documentation, and five paired audio fixtures for smoke testing. Checkpoints, raw participant audio, complete datasets, and generated experimental results should be distributed separately only when licensing, consent, ethics, and privacy constraints allow it.
